@@ -1,0 +1,96 @@
+# Bennet price tracker
+
+Scarica ogni giorno prezzi, promozioni e schede prodotto del catalogo online Bennet
+per un punto vendita e li salva in un database SQLite: in locale un file (`bennet.db`),
+in produzione un database [Turso](https://turso.tech) aggiornato ogni notte da GitHub Actions.
+
+## Uso
+
+```sh
+uv sync
+uv run python main.py daily                    # prezzi + date promo + fino a 500 schede da scaricare
+uv run python main.py daily --details-minutes 60  # ... con al massimo 60 minuti di schede
+uv run python main.py prices                   # solo prezzi e date promo
+uv run python main.py details --limit 2000     # solo schede dei prodotti nuovi o rinominati
+uv run python main.py export ultimi_prezzi.csv # vista latest_prices in CSV
+uv run python main.py stores 45.0375 7.6590    # punti vendita vicini a una posizione
+uv run python main.py upload                   # copia bennet.db su Turso
+```
+
+Se sono impostate le variabili `TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN` (anche in un file
+`.env`, escluso da git), tutti i comandi usano Turso invece del file locale.
+
+Opzioni globali: `--store` (default `0113`, Torino via Giordano Bruno), `--db`,
+`--delay` (secondi tra due richieste, default 10 come chiede il `robots.txt`).
+
+## Come funziona il sito
+
+- `www.bennet.com` è SAP Commerce dietro Akamai: un client HTTP normale riceve 403,
+  per questo si usa `curl_cffi`, che imita l'impronta TLS di Chrome.
+- Il punto vendita si sceglie con `POST /pos/select` (body: `"0113"`, header `CSRFToken`
+  preso dall'attributo `data-csrftoken` della home). Il negozio 0113 non ha un
+  e-commerce proprio: ricerca e prezzi online usano il catalogo del **0009 (Torino San Paolo)**.
+  I prezzi a scaffale in via Giordano Bruno potrebbero quindi differire.
+- L'elenco prodotti arriva da FACT-Finder:
+  `https://search-prod.bennet.com/fact-finder/rest/v5/navigation/Bennet_PROD?filter=StoreID:0009&hitsPerPage=200&page=N`.
+  Circa 20.000 prodotti in circa 100 richieste, compresi quelli esauriti (`stockLevelStatus` `absent`), con prezzo, prezzo barrato, prezzo al kg/l,
+  tipo e percentuale di sconto, EAN, marca, categorie e caratteristiche.
+  Questo host risponde 403 se riceve i cookie Akamai di www.bennet.com, quindi usa una sessione separata.
+- Le offerte di un giorno ("Prezzo Eccezionale il 7/10") nel catalogo hanno solo l'etichetta
+  `marketingLabel`: prezzo pieno e `hasPromotion` falso. Il prezzo scontato è solo nella pagina
+  prodotto, che il run giornaliero legge una volta per offerta; nello storico prezzi queste
+  offerte hanno `promo_type` `PrezzoEccezionale`.
+- Le **date delle promozioni** e i dati statici (ingredienti, allergeni, valori nutrizionali,
+  conservazione, produttore, foto 1000×1000) sono solo nella pagina prodotto. Le date sono
+  uguali per tutti i prodotti con lo stesso codice promo, quindi basta una pagina per codice.
+
+## Tempi (con 10 s tra le richieste)
+
+| Job | Richieste | Durata |
+| --- | --- | --- |
+| Prezzi di tutto il catalogo | ~100 | ~17 min |
+| Date promo (una pagina per codice nuovo) | qualche decina | ~5–20 min |
+| Schede prodotto, prima volta | ~20.000 | ~55 h, da distribuire su più giorni con `--limit` |
+| Schede prodotto, a regime | solo prodotti nuovi o rinominati | pochi minuti al giorno |
+
+Il `robots.txt` chiede anche di visitare il sito tra le 04:00 e le 08:45 UTC.
+
+## Tabelle
+
+- `products`: una riga per prodotto (anagrafica e scheda). I bundle (mix di più
+  prodotti, ID `B_...`) sono esclusi.
+- `products`: `first_seen` è il primo run che l'ha trovato. Un prodotto che non è più nel
+  catalogo (eliminato dal sito, non solo esaurito) viene cancellato insieme al suo storico prezzi.
+  La scheda si scarica una volta sola e si riscarica solo se il prodotto cambia nome
+  (`details_fetched_at` vuoto = scheda da scaricare). I prodotti esauriti non hanno una pagina
+  (il sito risponde 404): la loro scheda si scarica quando tornano disponibili.
+- `prices`: storico prezzi a periodi. Una riga per ogni periodo in cui prezzo, promo e
+  disponibilità non cambiano. Il periodo corrente ha `valid_to` vuoto; quando qualcosa
+  cambia viene chiuso con la data dell'ultimo run che l'ha visto e se ne apre uno nuovo.
+  Un giorno senza cambi non scrive nulla. Prezzo di un prodotto in una data:
+  `SELECT * FROM prices WHERE product_id = ? AND ? BETWEEN valid_from AND COALESCE(valid_to, '9999-12-31')`.
+- `promotions`: date di inizio e fine per ogni codice promo.
+- `runs`: un run completato per giorno, con quanti prodotti, cambi, novità e rimozioni.
+- `latest_prices` (vista): prezzi correnti uniti all'anagrafica.
+
+Il run giornaliero scarica prima l'intero catalogo e scrive solo se è completo (almeno il
+98% del totale dichiarato dal sito): un run interrotto non lascia dati a metà e non cancella prodotti.
+
+## Produzione: Turso + GitHub Actions
+
+Il workflow `.github/workflows/daily.yml` esegue `daily` ogni giorno alle 04:15 UTC (ed è
+avviabile a mano da *Actions → Daily scrape → Run workflow*).
+
+1. Su [turso.tech](https://turso.tech) crea un database (regione europea) e un token.
+2. Nel repository GitHub, *Settings → Secrets and variables → Actions*: aggiungi i secret
+   `TURSO_DATABASE_URL` (`libsql://...`) e `TURSO_AUTH_TOKEN`.
+3. Variabili di repository opzionali (scheda *Variables*):
+   - `DETAILS_MINUTES`: minuti dedicati alle schede prodotto (default 180). Con un repository
+     privato i minuti gratuiti di Actions sono limitati: tienila bassa (~30).
+   - `DELAY`: secondi tra due richieste (default 10, come chiede il `robots.txt`).
+
+   Avviando il workflow a mano si possono sovrascrivere entrambe solo per quel run.
+4. Per caricare i dati già scaricati in locale: `uv run python main.py upload`.
+
+Su un repository pubblico GitHub disattiva i workflow pianificati dopo 60 giorni senza
+attività sul repository: in quel caso va riattivato dalla pagina Actions.

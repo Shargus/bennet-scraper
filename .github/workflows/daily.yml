@@ -1,0 +1,39 @@
+name: Daily scrape
+
+on:
+  schedule:
+    # bennet.com/robots.txt asks for visits between 04:00 and 08:45 UTC;
+    # GitHub may start scheduled runs some minutes late.
+    - cron: "15 4 * * *"
+  # Manual runs: empty inputs fall back to the repository variables
+  # DETAILS_MINUTES and DELAY, then to the defaults below.
+  workflow_dispatch:
+    inputs:
+      details_minutes:
+        description: "Time budget for product pages, minutes (empty: DETAILS_MINUTES or 180)"
+        default: ""
+      delay:
+        description: "Seconds between requests (empty: DELAY or 10)"
+        default: ""
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 280
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - name: Scrape
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          DETAILS_MINUTES: ${{ inputs.details_minutes || vars.DETAILS_MINUTES || '180' }}
+          DELAY: ${{ inputs.delay || vars.DELAY || '10' }}
+        run: |
+          uv run python main.py --delay "$DELAY" daily \
+            --details-limit 100000 --details-minutes "$DETAILS_MINUTES"
