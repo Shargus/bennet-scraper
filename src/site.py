@@ -1,7 +1,9 @@
 """Static price-history website: JSON data exported from the database plus the files in site/."""
 
+import hashlib
 import json
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -84,11 +86,23 @@ def _dump(path: Path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
+def _bust_cache(out: Path):
+    """Add a version of the static files to their URLs (style.css?v=...), so a browser
+    never mixes a new page with a stylesheet or script still in its cache."""
+    files = sorted(p for p in out.iterdir() if p.suffix in (".css", ".js", ".html"))
+    version = hashlib.sha1(b"".join(p.read_bytes() for p in files)).hexdigest()[:10]
+    names = "|".join(re.escape(p.name) for p in files if p.suffix != ".html")
+    pattern = re.compile(rf'((?:href|src)="|from "\./)({names})"')
+    for p in files:
+        p.write_text(pattern.sub(rf'\1\2?v={version}"', p.read_text(encoding="utf-8")), encoding="utf-8")
+
+
 def build_site(db, out: str):
     out = Path(out)
     if out.exists():
         shutil.rmtree(out)
     shutil.copytree(STATIC_DIR, out)
+    _bust_cache(out)
     (out / "data" / "p").mkdir(parents=True)
 
     products = _rows(db, "SELECT * FROM products", "product_id")
