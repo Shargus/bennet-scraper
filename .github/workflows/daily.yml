@@ -1,11 +1,14 @@
 name: Daily scrape
 
 on:
+  # The daily run is started at 04:15 UTC by an external cron service calling
+  # the GitHub API (workflow_dispatch): bennet.com/robots.txt asks for visits
+  # between 04:00 and 08:45 UTC, and GitHub starts scheduled runs hours late.
+  # This schedule is only a fallback: it does nothing if a run already
+  # succeeded today.
   schedule:
-    # bennet.com/robots.txt asks for visits between 04:00 and 08:45 UTC;
-    # GitHub may start scheduled runs some minutes late.
     - cron: "15 4 * * *"
-  # Manual runs: empty inputs fall back to the repository variables
+  # Manual and external runs: empty inputs fall back to the repository variables
   # DETAILS_MINUTES and DELAY, then to the defaults below.
   workflow_dispatch:
     inputs:
@@ -20,15 +23,33 @@ concurrency:
   group: scrape
   cancel-in-progress: false
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 280
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync --frozen
+      - name: Skip if today's scrape already succeeded
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          done=$(gh run list -R "$GITHUB_REPOSITORY" -w daily.yml -s success \
+            --created ">=$(date -u +%F)" --json databaseId -q length)
+          echo "done=$([ "$done" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          [ "$done" -gt 0 ] && echo "::notice::Today's scrape already ran, nothing to do" || true
+      - if: steps.guard.outputs.done != 'true'
+        uses: actions/checkout@v4
+      - if: steps.guard.outputs.done != 'true'
+        uses: astral-sh/setup-uv@v6
+      - if: steps.guard.outputs.done != 'true'
+        run: uv sync --frozen
       - name: Scrape
+        if: steps.guard.outputs.done != 'true'
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}

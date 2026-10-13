@@ -86,7 +86,22 @@ Il run giornaliero scarica prima l'intero catalogo e scrive solo se è completo 
 ## Produzione: Turso + GitHub Actions
 
 Il workflow `.github/workflows/daily.yml` esegue `daily` ogni giorno alle 04:15 UTC (ed è
-avviabile a mano da *Actions → Daily scrape → Run workflow*).
+avviabile a mano da *Actions → Daily scrape → Run workflow*). GitHub avvia i workflow pianificati
+con ore di ritardo, fuori dalla finestra 04:00–08:45 UTC chiesta dal `robots.txt`; per questo il
+run giornaliero lo avvia un servizio di cron esterno ([cron-job.org](https://cron-job.org)) con
+una chiamata all'API di GitHub. Il cron di GitHub resta come riserva e non fa nulla se quel
+giorno un run è già andato a buon fine.
+
+Configurazione del cron esterno:
+
+1. Su GitHub crea un *fine-grained personal access token* (*Settings → Developer settings*)
+   limitato a questo repository, con il solo permesso *Actions: Read and write*.
+2. Su cron-job.org crea un job giornaliero alle 04:15, fuso orario UTC, con richiesta
+   `POST https://api.github.com/repos/Shargus/bennet-scraper/actions/workflows/daily.yml/dispatches`,
+   header `Accept: application/vnd.github+json`, `Authorization: Bearer <token>`,
+   `X-GitHub-Api-Version: 2022-11-28`, `Content-Type: application/json` e body `{"ref": "main"}`.
+   GitHub risponde `204` quando avvia il workflow.
+3. Alla scadenza del token, creane uno nuovo e aggiorna l'header del job.
 
 1. Su [turso.tech](https://turso.tech) crea un database (regione europea) e un token.
 2. Nel repository GitHub, *Settings → Secrets and variables → Actions*: aggiungi i secret
