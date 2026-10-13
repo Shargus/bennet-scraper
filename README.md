@@ -85,12 +85,12 @@ Il run giornaliero scarica prima l'intero catalogo e scrive solo se è completo 
 
 ## Produzione: Turso + GitHub Actions
 
-Il workflow `.github/workflows/daily.yml` esegue `daily` ogni giorno alle 04:15 UTC (ed è
-avviabile a mano da *Actions → Daily scrape → Run workflow*). GitHub avvia i workflow pianificati
-con ore di ritardo, fuori dalla finestra 04:00–08:45 UTC chiesta dal `robots.txt`; per questo il
-run giornaliero lo avvia un servizio di cron esterno ([cron-job.org](https://cron-job.org)) con
-una chiamata all'API di GitHub. Il cron di GitHub resta come riserva e non fa nulla se quel
-giorno un run è già andato a buon fine.
+Il workflow `.github/workflows/daily.yml` esegue `daily` ogni giorno alle 04:15 UTC, avviato da
+un servizio di cron esterno ([cron-job.org](https://cron-job.org)) con una chiamata all'API di
+GitHub; si può avviare anche a mano da *Actions → Daily scrape → Run workflow*. Il workflow non ha
+un cron proprio: GitHub avvia i workflow pianificati con ore di ritardo, fuori dalla finestra
+04:00–08:45 UTC chiesta dal `robots.txt`. Se il cron esterno smette di funzionare (per esempio
+alla scadenza del token), lo scraping si ferma finché non viene sistemato.
 
 Configurazione del cron esterno:
 
@@ -103,6 +103,8 @@ Configurazione del cron esterno:
    GitHub risponde `204` quando avvia il workflow.
 3. Alla scadenza del token, creane uno nuovo e aggiorna l'header del job.
 
+Database e secret:
+
 1. Su [turso.tech](https://turso.tech) crea un database (regione europea) e un token.
 2. Nel repository GitHub, *Settings → Secrets and variables → Actions*: aggiungi i secret
    `TURSO_DATABASE_URL` (`libsql://...`) e `TURSO_AUTH_TOKEN`.
@@ -113,9 +115,6 @@ Configurazione del cron esterno:
 
    Avviando il workflow a mano si possono sovrascrivere entrambe solo per quel run.
 4. Per caricare i dati già scaricati in locale: `uv run python main.py upload`.
-
-Su un repository pubblico GitHub disattiva i workflow pianificati dopo 60 giorni senza
-attività sul repository: in quel caso va riattivato dalla pagina Actions.
 
 ## Sito con lo storico prezzi
 
