@@ -7,6 +7,7 @@ from datetime import date
 from src.client import DEFAULT_DELAY, BennetClient
 from src.db import TursoDB, connect, upsert_sql
 from src.jobs import update_details, update_prices, update_promotions
+from src.site import build_site
 
 DEFAULT_STORE = "0113"  # Torino, via Giordano Bruno 142 (10134)
 TABLES = {  # table: primary key
@@ -70,6 +71,9 @@ def main():
 
     sub.add_parser("upload", help="copy the local --db file to Turso")
 
+    si = sub.add_parser("site", help="build the static price-history website (GitHub Pages)")
+    si.add_argument("out", nargs="?", default="_site")
+
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -90,6 +94,9 @@ def main():
             w.writerow(rows[0].keys() if rows else [])
             w.writerows(r.values() for r in rows)
         print(f"{len(rows)} rows written to {args.out}")
+        return
+    if args.cmd == "site":
+        build_site(db, args.out)
         return
 
     client = BennetClient(args.store, delay=args.delay)

@@ -15,3 +15,6 @@ wheels/
 *.csv
 *.db-journal
 .env
+
+# Built website
+_site/

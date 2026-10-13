@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Storico prezzi Bennet</title>
+  <meta name="description" content="Andamento dei prezzi e delle promozioni del catalogo online Bennet (sito non ufficiale).">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23eb6834'/%3E%3Cpath d='M6 22l6-7 5 4 9-10' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M6 22l6-7 5 4 9-10"/></svg>
+      <span><strong>Storico prezzi Bennet</strong><small>sito non ufficiale</small></span>
+    </a>
+    <label class="search">
+      <span class="visually-hidden">Cerca un prodotto</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <input id="search" type="search" placeholder="Cerca per nome, marca o codice EAN" autocomplete="off">
+    </label>
+    <button id="theme" class="icon-button" type="button" title="Cambia tema" aria-label="Cambia tema">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" class="fill"/></svg>
+    </button>
+  </header>
+  <main id="app" aria-live="polite">
+    <p class="loading">Caricamento del catalogo…</p>
+  </main>
+  <footer class="footer">
+    <p>Prezzi del catalogo online Bennet usato dal punto vendita di Torino, via Giordano Bruno. <span id="updated"></span></p>
+    <p>Sito non ufficiale, non affiliato a Bennet S.p.A. I prezzi in negozio possono essere diversi.</p>
+  </footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

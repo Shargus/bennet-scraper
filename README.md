@@ -15,6 +15,7 @@ uv run python main.py details --limit 2000     # solo schede dei prodotti nuovi 
 uv run python main.py export ultimi_prezzi.csv # vista latest_prices in CSV
 uv run python main.py stores 45.0375 7.6590    # punti vendita vicini a una posizione
 uv run python main.py upload                   # copia bennet.db su Turso
+uv run python main.py site                     # costruisce il sito statico in _site/
 ```
 
 Se sono impostate le variabili `TURSO_DATABASE_URL` e `TURSO_AUTH_TOKEN` (anche in un file
@@ -94,3 +95,26 @@ avviabile a mano da *Actions → Daily scrape → Run workflow*).
 
 Su un repository pubblico GitHub disattiva i workflow pianificati dopo 60 giorni senza
 attività sul repository: in quel caso va riattivato dalla pagina Actions.
+
+## Sito con lo storico prezzi
+
+`site/` contiene un sito statico (HTML, CSS e JavaScript, senza build) che mostra il catalogo
+diviso per categoria e sottocategoria, con ricerca, filtri e paginazione. La pagina di ogni
+prodotto mostra il grafico dell'andamento del prezzo (stile Keepa: prezzo pagato, prezzo pieno,
+promozioni, periodi non acquistabili), lo storico dei periodi e la scheda prodotto.
+
+`main.py site` legge il database e scrive in `_site/` i file del sito più i dati:
+`data/catalog.json` (una riga per prodotto) e `data/p/<id>.json` (storico e scheda di un
+prodotto). Per provarlo in locale:
+
+```sh
+uv run python main.py site && python -m http.server -d _site 8000
+```
+
+Il workflow `.github/workflows/site.yml` ricostruisce il sito dopo ogni run riuscito di
+*Daily scrape* (e quando cambia il codice del sito) e lo pubblica su GitHub Pages. Va abilitato
+una volta da *Settings → Pages → Source: GitHub Actions*; con un account gratuito GitHub Pages
+richiede un repository pubblico.
+
+Nel catalogo il flag `privateLabel` è invertito: vale falso per i marchi Bennet (BENNET,
+BENNET BIO, SELEZIONE GOURMET BENNET...) e vero per tutti gli altri. Il sito ne tiene conto.
