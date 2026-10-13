@@ -3,6 +3,12 @@
 Scarica ogni giorno prezzi, promozioni e schede prodotto del catalogo online Bennet
 per un punto vendita e li salva in un database SQLite: in locale un file (`bennet.db`),
 in produzione un database [Turso](https://turso.tech) aggiornato ogni notte da GitHub Actions.
+Lo storico è consultabile sul sito <https://shargus.github.io/bennet-scraper/>.
+
+**Punto vendita:** Bennet di **Torino, via Giordano Bruno 142** (codice `0113`, il default di
+`--store`). Questo negozio non ha un e-commerce proprio: il sito Bennet gli associa il catalogo
+online di Torino San Paolo (`0009`), quindi i prezzi raccolti sono quelli online e quelli a
+scaffale in via Giordano Bruno possono essere diversi.
 
 ## Uso
 
