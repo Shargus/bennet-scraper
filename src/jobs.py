@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 CHECKOUT_PROMOTIONS = {"PromotionMixMatch", "PromotionExtraRewardPoints"}
 
 # A catalog download with fewer products than this share of the reported total is
-# treated as failed, so products missing from it are not deleted.
+# treated as failed, so products missing from it aren't marked as removed.
 MIN_CATALOG_COMPLETENESS = 0.98
 
 # One-day offers (marketingLabel "Prezzo Eccezionale il 7/10"): the search backend keeps
@@ -133,11 +133,12 @@ def _apply_special_offer(client: BennetClient, row: dict, cur: dict | None, url:
 def update_prices(client: BennetClient, db, today: date) -> dict:
     """Download the whole catalog, then write only what changed since the last run.
 
-    Products missing from the catalog are deleted with their price history; a product
-    whose name changed gets its page queued again for `update_details`. One-day
+    Products missing from the catalog are kept with their history and get `removed_on`
+    (the first run that didn't find them), cleared if they come back; a product whose
+    name changed gets its page queued again for `update_details`. One-day
     "Prezzo Eccezionale" offers get their discounted price from the product page.
     Nothing is written unless the full catalog was downloaded, so an interrupted
-    run doesn't delete products or split their price periods.
+    run doesn't mark products as removed or split their price periods.
     """
     day = today.isoformat()
     hits, total_hits = client.fetch_catalog()
@@ -171,19 +172,24 @@ def update_prices(client: BennetClient, db, today: date) -> dict:
             specials += _apply_special_offer(client, row, current.get(pid), products[pid]["url"], today)
 
     stmts = []
-    new = changed = renamed = removed = 0
+    new = changed = renamed = returned = removed = 0
     catalog_fields = [f for f in next(iter(products.values())) if f != "product_id"]
     for pid, row in products.items():
         old = known.get(pid)
         if old is None:
             new += 1
             stmts.append(upsert_sql("products", {**row, "first_seen": day}, ("product_id",)))
-        elif old["name"] != row["name"]:
+            continue
+        update = dict(row)
+        if old["name"] != row["name"]:
             # a new name is the sign that the product page changed too
             renamed += 1
-            stmts.append(upsert_sql("products", {**row, "details_fetched_at": None}, ("product_id",)))
-        elif not _same(old, row, catalog_fields):
-            stmts.append(upsert_sql("products", row, ("product_id",)))
+            update["details_fetched_at"] = None
+        if old["removed_on"]:
+            returned += 1
+            update["removed_on"] = None
+        if len(update) > len(row) or not _same(old, row, catalog_fields):
+            stmts.append(upsert_sql("products", update, ("product_id",)))
 
     for pid, row in prices.items():
         cur = current.get(pid)
@@ -199,14 +205,14 @@ def update_prices(client: BennetClient, db, today: date) -> dict:
                                 ("product_id", "store_id", "valid_from")))
 
     for pid, cur in current.items():
-        if pid not in prices and pid in products:
+        if pid not in prices:
             stmts.append(("UPDATE prices SET valid_to = ? WHERE product_id = ? AND store_id = ? AND valid_from = ?",
                           (last_run or cur["valid_from"], pid, store, cur["valid_from"])))
 
     for pid in known.keys() - products.keys():
-        removed += 1
-        stmts.append(("DELETE FROM prices WHERE product_id = ?", (pid,)))
-        stmts.append(("DELETE FROM products WHERE product_id = ?", (pid,)))
+        if not known[pid]["removed_on"]:
+            removed += 1
+            stmts.append(("UPDATE products SET removed_on = ? WHERE product_id = ?", (day, pid)))
 
     stats = {"products": len(products), "total_hits": total_hits, "price_changes": changed,
              "new_products": new, "removed": removed}
@@ -214,9 +220,9 @@ def update_prices(client: BennetClient, db, today: date) -> dict:
                                      "finished_at": datetime.now().isoformat(timespec="seconds")},
                             ("run_date", "store_id")))
     db.batch(stmts)
-    log.info("catalog: %d products (%d bundles skipped), %d new, %d renamed, %d price changes, "
-             "%d removed, %d special offers read, %d writes",
-             len(products), bundles, new, renamed, changed, removed, specials, len(stmts))
+    log.info("catalog: %d products (%d bundles skipped), %d new, %d back in the catalog, %d renamed, "
+             "%d price changes, %d removed, %d special offers read, %d writes",
+             len(products), bundles, new, returned, renamed, changed, removed, specials, len(stmts))
     return stats
 
 
@@ -283,11 +289,12 @@ def update_details(client: BennetClient, db, today: date, limit: int,
                    max_minutes: float | None = None) -> int:
     """Fetch the pages of new products and of products whose name changed
     (`update_prices` clears their details_fetched_at); pages are never refreshed otherwise.
-    Out-of-stock products have no page (404) until they are back in stock."""
+    Out-of-stock products and products no longer in the catalog have no page (404)
+    until they are back."""
     deadline = time.monotonic() + max_minutes * 60 if max_minutes else None
     rows = db.query("""
         SELECT product_id, url FROM products
-        WHERE details_fetched_at IS NULL AND NOT EXISTS (
+        WHERE details_fetched_at IS NULL AND removed_on IS NULL AND NOT EXISTS (
             SELECT 1 FROM prices pr WHERE pr.product_id = products.product_id
               AND pr.valid_to IS NULL AND pr.stock_status = 'absent')
         ORDER BY first_seen

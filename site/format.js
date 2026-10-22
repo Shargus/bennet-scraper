@@ -34,6 +34,7 @@ export const STOCK = {
   l: { label: "Ultimi pezzi", level: "warn" },
   o: { label: "Non acquistabile online", level: "bad" },
   a: { label: "Esaurito", level: "bad" },
+  r: { label: "Non più in catalogo", level: "bad" },
 };
 
 const UNITS = { kg: "kg", lt: "l", mt: "m" };

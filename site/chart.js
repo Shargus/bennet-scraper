@@ -20,8 +20,11 @@ const MIN_SPAN = 7 * DAY;
  * Price periods of data/p/<id>.json as segments [start, end) in ms, each with the price
  * paid and the full price; the full price of a discount that doesn't expose it is
  * estimated from the closest period without a discount (`regularEstimated`).
+ * A period ends early when a run in `runs` (ISO dates) didn't find the product:
+ * the days until the next period are a gap, when it was not in the catalog.
  */
-export function buildSegments(product, lastRun, unit) {
+export function buildSegments(product, lastRun, unit, runs = []) {
+  const runTimes = runs.map(parseDay);
   const col = Object.fromEntries(product.columns.map((c, i) => [c, i]));
   const rows = product.history
     .map((r) => ({
@@ -47,6 +50,7 @@ export function buildSegments(product, lastRun, unit) {
     const next = rows[i + 1];
     r.start = r.from;
     r.end = next ? next.from : r.to == null ? end : r.to + DAY;
+    if (next && r.to != null && runTimes.some((t) => t > r.to && t < next.from)) r.end = r.to + DAY;
     // a "-20%" text can disagree with the prices: the discount is computed from them instead
     const text = r.promoType ? product.promos?.[r.promoCode] || null : null;
     r.promoText = text && !/^-?\s*\d+([.,]\d+)?\s*%$/.test(text) ? text : null;
@@ -119,6 +123,12 @@ export class PriceChart {
     this.first = segments.length ? segments[0].start : this.end - MIN_SPAN;
     this.range = "all";
     this.visible = { paid: true, regular: true, promo: true, na: true };
+    // days without data after the first observation: the product was not in the catalog
+    this.gaps = [];
+    segments.forEach((g, i) => {
+      const nextStart = i + 1 < segments.length ? segments[i + 1].start : this.end;
+      if (g.end < nextStart) this.gaps.push({ start: g.end, end: nextStart });
+    });
     this.onRangeChange = onRangeChange;
     this.id = `pc${++uid}`;
     this.hoverDay = null;
@@ -202,6 +212,15 @@ export class PriceChart {
       if (xr - m.left > 110) {
         layer.append(s("text", { x: (m.left + xr) / 2, y: m.top + ht / 2, "text-anchor": "middle", class: "nodata-label" },
           `Nessun dato prima del ${fmtDay(this.first)}`));
+      }
+    }
+    for (const gap of this.gaps) {
+      if (gap.end <= x0 || gap.start >= x1) continue;
+      const xa = X(gap.start), xb = X(gap.end);
+      layer.append(s("rect", { x: xa, y: m.top, width: Math.max(1, xb - xa), height: ht, class: "gap" }));
+      if (xb - xa > 90) {
+        layer.append(s("text", { x: (xa + xb) / 2, y: m.top + ht / 2, "text-anchor": "middle", class: "nodata-label" },
+          "Fuori catalogo"));
       }
     }
     if (this.visible.na) {
@@ -339,7 +358,7 @@ export class PriceChart {
       if (unitPrice) extra.push(h("div", {}, unitPrice));
       extra.push(h("div", {}, (STOCK[g.stock] || STOCK.i).label));
     } else {
-      extra.push(h("div", {}, "Nessun dato per questo giorno"));
+      extra.push(h("div", {}, day >= this.first ? "Non presente nel catalogo" : "Nessun dato per questo giorno"));
     }
     this.tip.replaceChildren(h("div", { class: "date" }, fmtLongDate(day)), ...rows,
       extra.length ? h("div", { class: "extra" }, extra) : null);

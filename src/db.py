@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS products (
     max_order_quantity  INTEGER,
     thumbnail_url       TEXT,
     first_seen          TEXT,
+    removed_on          TEXT,               -- first run that no longer found it; NULL if listed
     -- from the product page (see `details` command)
     package_size        TEXT,
     short_description   TEXT,
@@ -224,9 +225,8 @@ def _migrate(db):
     steps = []
     if "technical_specs" not in products:
         steps.append(("ALTER TABLE products ADD COLUMN technical_specs TEXT", ()))
-    if "removed_on" in products:
-        # products no longer listed are now deleted by the next run instead of being flagged
-        steps.append(("ALTER TABLE products DROP COLUMN removed_on", ()))
+    if "removed_on" not in products:
+        steps.append(("ALTER TABLE products ADD COLUMN removed_on TEXT", ()))
     if "description" not in _columns(db, "promotions"):
         steps.append(("ALTER TABLE promotions ADD COLUMN description TEXT", ()))
     db.batch(steps)
@@ -250,8 +250,7 @@ def _migrate(db):
                                      "marketing_label", "stock_status"))
              + " FROM prices_old", (last,)),
             ("DROP TABLE prices_old", ()),
-            ("DELETE FROM prices WHERE product_id IN (SELECT product_id FROM products WHERE last_seen < ?)", (last,)),
-            ("DELETE FROM products WHERE last_seen < ?", (last,)),
+            ("UPDATE products SET removed_on = ? WHERE last_seen < ?", (last, last)),
             ("INSERT OR IGNORE INTO runs (run_date, store_id, products) "
              "SELECT ?, store_id, COUNT(*) FROM prices WHERE valid_to IS NULL GROUP BY store_id", (last,)),
             ("ALTER TABLE products DROP COLUMN last_seen", ()),

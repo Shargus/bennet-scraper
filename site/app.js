@@ -16,6 +16,12 @@ const SORTS = [
   ["changed", "Variati di recente"],
   ["new", "Ultimi arrivati"],
 ];
+// Which products to list: in the catalog (default), also the ones no longer in it, or only those.
+const SHOW = [
+  ["", "Prodotti in catalogo"],
+  ["all", "Anche non più in catalogo"],
+  ["removed", "Solo non più in catalogo"],
+];
 const FLAGS = [
   ["promo", "In promozione"],
   ["avail", "Disponibili"],
@@ -43,7 +49,7 @@ async function loadCatalog() {
     for (const c of d.columns) p[c] = r[col[c]];
     p.path = d.categories[p.cat].filter(Boolean);
     p.thumbUrl = p.thumb ? (p.thumb.startsWith("http") ? p.thumb : d.thumbPrefix + p.thumb) : null;
-    p.available = p.stock === "i" || p.stock === "l";
+    p.available = !p.removed && (p.stock === "i" || p.stock === "l");
     p.discount = p.regular && p.price < p.regular ? 1 - p.price / p.regular : 0;
     p.dropped = p.prevPrice != null && p.price < p.prevPrice
       && p.lastChange && lastRun - parseDay(p.lastChange) <= 7 * DAY;
@@ -87,6 +93,7 @@ function parseRoute() {
       q: q.get("q") || "",
       cat: q.get("cat") ? q.get("cat").split(">") : [],
       promo: q.has("promo"), avail: q.has("avail"), drop: q.has("drop"), own: q.has("own"),
+      show: SHOW.some(([v]) => v === q.get("show")) ? q.get("show") : "",
       char: q.get("char") || "",
       pmin: q.get("pmin") || "", pmax: q.get("pmax") || "",
       sort: q.get("sort") || "",
@@ -100,7 +107,7 @@ function listHash(st) {
   if (st.q) q.set("q", st.q);
   if (st.cat.length) q.set("cat", st.cat.join(">"));
   for (const [k] of FLAGS) if (st[k]) q.set(k, "");
-  for (const k of ["char", "pmin", "pmax", "sort"]) if (st[k]) q.set(k, st[k]);
+  for (const k of ["show", "char", "pmin", "pmax", "sort"]) if (st[k]) q.set(k, st[k]);
   if (st.page > 1) q.set("page", st.page);
   const qs = q.toString().replace(/=(&|$)/g, "$1");
   return `#/${qs ? `?${qs}` : ""}`;
@@ -121,6 +128,8 @@ function filterProducts(st, { ignoreCat = false } = {}) {
   const pmin = num(st.pmin), pmax = num(st.pmax), ch = st.char === "" ? null : +st.char;
   return data.products.filter((p) => {
     if (!ignoreCat) for (let i = 0; i < st.cat.length; i++) if (p.path[i] !== st.cat[i]) return false;
+    if (st.show === "" && p.removed) return false;
+    if (st.show === "removed" && !p.removed) return false;
     if (st.promo && !p.promo) return false;
     if (st.avail && !p.available) return false;
     if (st.drop && !p.dropped) return false;
@@ -152,7 +161,7 @@ function sortProducts(list, st) {
     new: (a, b) => b.firstSeen.localeCompare(a.firstSeen),
   }[st.sort];
   if (cmp) return list.sort((a, b) => cmp(a, b) || byName(a, b));
-  const score = (p) => (p.available ? 0 : 4)
+  const score = (p) => (p.removed ? 8 : 0) + (p.available ? 0 : 4)
     + (tokens.length && !p.nameKey.startsWith(tokens[0]) ? 1 : 0)
     + (tokens.length && !tokens.every((t) => p.nameKey.includes(t)) ? 2 : 0);
   return list.sort((a, b) => score(a) - score(b) || byName(a, b));
@@ -239,7 +248,7 @@ function sidebar(st) {
 }
 
 function filtersRow(st) {
-  const active = FLAGS.some(([k]) => st[k]) || st.char || st.pmin || st.pmax;
+  const active = FLAGS.some(([k]) => st[k]) || st.show || st.char || st.pmin || st.pmax;
   let timer;
   const priceInput = (key, placeholder) => h("input", {
     class: "price-input", type: "text", inputmode: "decimal", placeholder, value: st[key], "data-focus": key,
@@ -250,12 +259,14 @@ function filtersRow(st) {
   return h("div", { class: "filters", role: "group", "aria-label": "Filtri" },
     FLAGS.map(([k, label]) => h("label", { class: "chip" },
       h("input", { type: "checkbox", checked: st[k], onchange: (e) => go({ ...st, [k]: e.target.checked, page: 1 }) }), label)),
+    h("select", { class: "select", "aria-label": "Prodotti da mostrare", onchange: (e) => go({ ...st, show: e.target.value, page: 1 }) },
+      SHOW.map(([v, l]) => h("option", { value: v, selected: v === st.show }, l))),
     h("select", { class: "select", "aria-label": "Caratteristica", onchange: (e) => go({ ...st, char: e.target.value, page: 1 }) },
       h("option", { value: "" }, "Tutte le caratteristiche"),
       data.chars.map((c) => h("option", { value: c.id, selected: String(c.id) === st.char }, `${sentenceCase(c.name)} (${c.n})`))),
     h("span", { class: "price-range" }, "€", priceInput("pmin", "min"), "–", priceInput("pmax", "max")),
     active ? h("button", { class: "link-button", type: "button",
-      onclick: () => go({ ...st, promo: false, avail: false, drop: false, own: false, char: "", pmin: "", pmax: "", page: 1 }) },
+      onclick: () => go({ ...st, promo: false, avail: false, drop: false, own: false, show: "", char: "", pmin: "", pmax: "", page: 1 }) },
     "Azzera filtri") : null);
 }
 
@@ -267,7 +278,7 @@ function card(p) {
       p.thumbUrl ? h("img", { src: p.thumbUrl, alt: "", loading: "lazy", decoding: "async", width: 200, height: 200 }) : null),
     h("div", { class: "badges" },
       p.promo ? h("span", { class: "badge promo" }, p.promo) : p.atMin ? h("span", { class: "badge low" }, "Minimo storico") : null,
-      p.available ? null : h("span", { class: "badge stock" }, STOCK[p.stock].label)),
+      p.available ? null : h("span", { class: "badge stock" }, STOCK[p.removed ? "r" : p.stock].label)),
     h("div", { class: "name" }, p.name),
     h("div", { class: "meta" }, [p.brand && sentenceCase(p.brand), p.size].filter(Boolean).join(" · ") || " "),
     h("div", { class: "prices" },
@@ -276,7 +287,8 @@ function card(p) {
       delta ? h("span", { class: `delta ${delta < 0 ? "down" : "up"}`, title: `Prima: ${fmtEuro(p.prevPrice)}` },
         `${delta < 0 ? "▼" : "▲"} ${fmtEuro(Math.abs(delta))}`) : null,
       unit ? h("span", { class: "unit" }, unit) : null,
-      p.promoEnd ? h("span", { class: "until" }, `Promo fino al ${fmtDay(p.promoEnd)}`) : null));
+      p.promoEnd ? h("span", { class: "until" }, `Promo fino al ${fmtDay(p.promoEnd)}`) : null,
+      p.removed ? h("span", { class: "until" }, `Ultimo prezzo, fuori catalogo dal ${fmtDay(p.removed)}`) : null));
 }
 
 function pager(page, pages, st) {
@@ -316,7 +328,7 @@ async function renderProduct(id) {
   }
   document.title = `${d.name} – Storico prezzi Bennet`;
   const unit = p?.unit || null;
-  const segs = buildSegments(d, data.lastRun, unit);
+  const segs = buildSegments(d, data.lastRun, unit, data.runs);
   const cur = segs[segs.length - 1];
   const path = (d.cat || []).filter(Boolean);
 
@@ -332,7 +344,7 @@ async function renderProduct(id) {
     infoPanel(d));
   window.scrollTo(0, 0);
 }
-parseRoute.empty = { q: "", cat: [], promo: false, avail: false, drop: false, own: false, char: "", pmin: "", pmax: "", sort: "", page: 1 };
+parseRoute.empty = { q: "", cat: [], promo: false, avail: false, drop: false, own: false, show: "", char: "", pmin: "", pmax: "", sort: "", page: 1 };
 
 function gallery(d) {
   const images = d.images || [];
@@ -354,7 +366,8 @@ function summary(d, p, segs, cur) {
   const min = Math.min(...prices), max = Math.max(...prices);
   const minSeg = segs.find((g) => g.price === min);
   const changes = segs.length - 1;
-  const promo = cur?.promoType;
+  const removed = d.removed;
+  const promo = removed ? null : cur?.promoType;
   const unitNow = fmtUnitPrice(cur?.ppu, cur?.unit);
   const tile = (label, value, note) => h("div", { class: "stat" },
     h("div", { class: "label" }, label), h("div", { class: "value" }, value), note ? h("div", { class: "note" }, note) : null);
@@ -365,16 +378,18 @@ function summary(d, p, segs, cur) {
     h("div", { class: "price-box" },
       h("div", { class: "now" },
         h("span", { class: "price" }, fmtEuro(cur?.price)),
-        cur?.regular && cur.regular > cur.price ? h("span", { class: "was" }, fmtEuro(cur.regular)) : null,
-        cur?.discount ? h("span", { class: "badge promo" }, `−${Math.round(cur.discount * 100)}%`) : null),
+        !removed && cur?.regular && cur.regular > cur.price ? h("span", { class: "was" }, fmtEuro(cur.regular)) : null,
+        !removed && cur?.discount ? h("span", { class: "badge promo" }, `−${Math.round(cur.discount * 100)}%`) : null),
       h("div", { class: "lines" },
+        removed ? h("span", {}, `Ultimo prezzo rilevato il ${fmtDate(cur.end - DAY)}. `
+          + `Il prodotto non è più nel catalogo online dal ${fmtDate(removed)}.`) : null,
         unitNow ? h("span", {}, unitNow) : null,
         promo ? h("span", {}, `${PROMO_TYPES[promo] || "Promozione"}${cur.promoText ? `: ${cur.promoText}` : ""}`
           + (cur.promoStart && cur.promoEnd ? `, dal ${fmtDay(cur.promoStart)} al ${fmtDay(cur.promoEnd)}` : "")) : null,
-        cur?.regularEstimated ? h("span", {}, "Prezzo pieno stimato dal periodo senza promozione più vicino.") : null,
+        !removed && cur?.regularEstimated ? h("span", {}, "Prezzo pieno stimato dal periodo senza promozione più vicino.") : null,
         cur?.label && !promo ? h("span", {}, cur.label) : null,
         d.maxOrder ? h("span", {}, `Massimo ${d.maxOrder} pezzi per ordine`) : null,
-        h("span", {}, statusBadge(cur?.stock)))),
+        h("span", {}, statusBadge(removed ? "r" : cur?.stock)))),
     h("div", { class: "stats" },
       tile("Minimo storico", fmtEuro(min), minSeg ? `dal ${fmtDay(minSeg.start)}` : null),
       tile("Massimo storico", fmtEuro(max)),
@@ -382,7 +397,7 @@ function summary(d, p, segs, cur) {
     d.chars?.length || d.own ? h("div", { class: "tags" },
       d.own ? h("span", { class: "tag" }, "Marchio Bennet") : null,
       (d.chars || []).map((c) => h("span", { class: "tag" }, sentenceCase(c)))) : null,
-    d.url ? h("p", {}, h("a", { class: "external", href: d.url, target: "_blank", rel: "noopener" }, "Vedi su bennet.com ↗")) : null);
+    d.url && !removed ? h("p", {}, h("a", { class: "external", href: d.url, target: "_blank", rel: "noopener" }, "Vedi su bennet.com ↗")) : null);
 }
 
 function chartPanel(d, segs) {
@@ -416,6 +431,7 @@ function chartPanel(d, segs) {
     h("span", { class: `key ${cls}` }), label);
     legend.append(b);
   }
+  if (chart.gaps.length) legend.append(h("span", { class: "legend-static" }, h("span", { class: "key rect gap" }), "Fuori catalogo"));
   return panel;
 }
 

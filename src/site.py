@@ -26,6 +26,7 @@ PAGE = 1000
 CATALOG_COLUMNS = [
     "id", "name", "brand", "cat", "thumb", "size", "price", "regular", "ppu", "unit",
     "promo", "promoEnd", "stock", "chars", "own", "firstSeen", "lastChange", "prevPrice", "minPrice", "eans",
+    "removed",
 ]
 # Columns of a price period in data/p/<id>.json.
 HISTORY_COLUMNS = [
@@ -110,7 +111,8 @@ def build_site(db, out: str):
     for r in _rows(db, "SELECT * FROM (SELECT *, product_id || '|' || valid_from AS k FROM prices)", "k"):
         history.setdefault(r["product_id"], []).append(r)
     promos = {r["promo_code"]: r["description"] for r in db.query("SELECT promo_code, description FROM promotions")}
-    last_run = db.query("SELECT MAX(run_date) AS d FROM runs")[0]["d"]
+    runs = [r["run_date"] for r in db.query("SELECT DISTINCT run_date FROM runs ORDER BY run_date")]
+    last_run = runs[-1]
 
     cats, cat_index, chars, char_index, rows = [], {}, [], {}, []
     for p in products:
@@ -130,20 +132,23 @@ def build_site(db, out: str):
             char_ids.append(char_index[c])
         prev = periods[-2]["price"] if len(periods) > 1 else None
         thumb = p["thumbnail_url"] or ""
+        removed = p["removed_on"]
+        promo = cur["has_promotion"] and not removed  # a removed product has no running promotion
         rows.append([
             p["product_id"], p["name"], p["brand"], cat_index[cat],
             thumb[len(THUMB_PREFIX):] if thumb.startswith(THUMB_PREFIX) else thumb,
-            _size(p), cur["price"], cur["regular_price"] if cur["has_promotion"] else None,
+            _size(p), cur["price"], cur["regular_price"] if promo else None,
             cur["price_per_unit"] or None, (cur["price_unit"] or "").lower() or None,
-            _promo_badge(cur, promos), cur["promo_end"] if cur["has_promotion"] else None,
+            _promo_badge(cur, promos) if promo else None, cur["promo_end"] if promo else None,
             STOCK_CODES.get(cur["stock_status"], "i"), char_ids, 1 if _own_brand(p) else 0,
             p["first_seen"], cur["valid_from"] if len(periods) > 1 else None, prev,
             min(r["price"] for r in periods if r["price"] is not None) if any(r["price"] for r in periods) else None,
-            " ".join(_loads(p["eans"]) or []) or None,
+            " ".join(_loads(p["eans"]) or []) or None, removed,
         ])
         _dump(out / "data" / "p" / f"{p['product_id']}.json", {
             "id": p["product_id"], "name": p["name"], "brand": p["brand"], "url": p["url"],
             "cat": cat, "eans": _loads(p["eans"]), "size": _size(p), "firstSeen": p["first_seen"],
+            "removed": removed,
             "own": _own_brand(p), "chars": _loads(p["characteristics"]),
             "images": _loads(p["image_urls"]) or ([p["thumbnail_url"]] if p["thumbnail_url"] else []),
             "shortDescription": p["short_description"], "description": p["description"],
@@ -161,8 +166,9 @@ def build_site(db, out: str):
         })
 
     _dump(out / "data" / "catalog.json", {
-        "generated": datetime.now().isoformat(timespec="seconds"), "lastRun": last_run,
+        "generated": datetime.now().isoformat(timespec="seconds"), "lastRun": last_run, "runs": runs,
         "thumbPrefix": THUMB_PREFIX, "categories": cats, "characteristics": chars,
         "columns": CATALOG_COLUMNS, "products": rows,
     })
-    log.info("site written to %s: %d products, last run %s", out, len(rows), last_run)
+    log.info("site written to %s: %d products (%d no longer in the catalog), last run %s",
+             out, len(rows), sum(1 for r in rows if r[-1]), last_run)

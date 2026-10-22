@@ -66,11 +66,13 @@ Il `robots.txt` chiede anche di visitare il sito tra le 04:00 e le 08:45 UTC.
 
 - `products`: una riga per prodotto (anagrafica e scheda). I bundle (mix di più
   prodotti, ID `B_...`) sono esclusi.
-- `products`: `first_seen` è il primo run che l'ha trovato. Un prodotto che non è più nel
-  catalogo (eliminato dal sito, non solo esaurito) viene cancellato insieme al suo storico prezzi.
+- `products`: `first_seen` è il primo run che l'ha trovato, `removed_on` il primo run che
+  non l'ha più trovato nel catalogo (vuoto se c'è). Un prodotto che sparisce resta nel database
+  con il suo storico prezzi; se ricompare, `removed_on` torna vuoto e si apre un nuovo periodo
+  di prezzo. Molti prodotti spariscono per qualche giorno e poi tornano.
   La scheda si scarica una volta sola e si riscarica solo se il prodotto cambia nome
-  (`details_fetched_at` vuoto = scheda da scaricare). I prodotti esauriti non hanno una pagina
-  (il sito risponde 404): la loro scheda si scarica quando tornano disponibili.
+  (`details_fetched_at` vuoto = scheda da scaricare). I prodotti esauriti o fuori catalogo non
+  hanno una pagina (il sito risponde 404): la loro scheda si scarica quando tornano.
 - `prices`: storico prezzi a periodi. Una riga per ogni periodo in cui prezzo, promo e
   disponibilità non cambiano. Il periodo corrente ha `valid_to` vuoto; quando qualcosa
   cambia viene chiuso con la data dell'ultimo run che l'ha visto e se ne apre uno nuovo.
@@ -119,7 +121,9 @@ Database e secret:
 ## Sito con lo storico prezzi
 
 `site/` contiene un sito statico (HTML, CSS e JavaScript, senza build) che mostra il catalogo
-diviso per categoria e sottocategoria, con ricerca, filtri e paginazione. La pagina di ogni
+diviso per categoria e sottocategoria, con ricerca, filtri e paginazione. Di default mostra solo
+i prodotti in catalogo; un filtro permette di includere anche quelli non più in catalogo, con
+l'ultimo prezzo rilevato e i giorni fuori catalogo nel grafico. La pagina di ogni
 prodotto mostra il grafico dell'andamento del prezzo (stile Keepa: prezzo pagato, prezzo pieno,
 promozioni, periodi non acquistabili), lo storico dei periodi e la scheda prodotto.
 
