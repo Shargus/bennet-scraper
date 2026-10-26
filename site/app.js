@@ -348,6 +348,11 @@ parseRoute.empty = { q: "", cat: [], promo: false, avail: false, drop: false, ow
 
 function gallery(d) {
   const images = d.images || [];
+  if (!images.length) {
+    // no product page: only the 200x200 thumbnail of the catalog, shown at its size
+    return h("div", { class: "gallery" }, h("div", { class: "main small" },
+      d.thumb ? h("img", { src: d.thumb, alt: d.name, width: 200, height: 200 }) : null));
+  }
   const main = h("img", { src: images[0] || "", alt: d.name });
   const thumbs = images.length > 1 ? h("div", { class: "thumbs" }, images.map((src, i) => {
     const b = h("button", { type: "button", "aria-label": `Immagine ${i + 1}`, "aria-current": i === 0 ? "true" : null,
@@ -397,7 +402,7 @@ function summary(d, p, segs, cur) {
     d.chars?.length || d.own ? h("div", { class: "tags" },
       d.own ? h("span", { class: "tag" }, "Marchio Bennet") : null,
       (d.chars || []).map((c) => h("span", { class: "tag" }, sentenceCase(c)))) : null,
-    d.url && !removed ? h("p", {}, h("a", { class: "external", href: d.url, target: "_blank", rel: "noopener" }, "Vedi su bennet.com ↗")) : null);
+    d.url && !removed && !d.detailsError ? h("p", {}, h("a", { class: "external", href: d.url, target: "_blank", rel: "noopener" }, "Vedi su bennet.com ↗")) : null);
 }
 
 function chartPanel(d, segs) {
@@ -493,7 +498,16 @@ function infoPanel(d) {
   }
   const shown = new Set(["Informazioni Generali", "Ingredienti e Allergeni", "Informazioni Nutrizionali"]);
   const others = Object.entries(d.sections || {}).filter(([k, v]) => !shown.has(k) && cleanText(v));
-  if (!blocks.length && !others.length) return null;
+  if (!blocks.length && !others.length) {
+    if (d.detailsFetched) return null;
+    return h("section", { class: "panel" },
+      h("h2", {}, "Informazioni sul prodotto"),
+      h("p", { class: "hint" }, d.detailsError
+        ? "Il sito Bennet non ha una pagina per questo prodotto, quindi descrizione, ingredienti e valori "
+          + "nutrizionali non sono disponibili. Prezzi e storico vengono dal catalogo."
+        : "La scheda di questo prodotto non è ancora stata scaricata: descrizione, ingredienti e valori "
+          + "nutrizionali compariranno nei prossimi giorni."));
+  }
   return h("section", { class: "panel" },
     h("h2", {}, "Informazioni sul prodotto"),
     blocks.length ? h("div", { class: "info-grid" }, blocks) : null,

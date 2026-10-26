@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS products (
     technical_specs     TEXT,               -- non-food products
     sections            TEXT,               -- JSON {tab title: text} with every info tab
     image_urls          TEXT,               -- JSON list of 1000x1000 images
-    details_fetched_at  TEXT
+    details_fetched_at  TEXT,
+    details_failed_at   TEXT,               -- last attempt that found no page (e.g. HTTP 404)
+    details_error       TEXT                -- error of that attempt
 );
 
 CREATE TABLE IF NOT EXISTS prices (
@@ -225,8 +227,9 @@ def _migrate(db):
     steps = []
     if "technical_specs" not in products:
         steps.append(("ALTER TABLE products ADD COLUMN technical_specs TEXT", ()))
-    if "removed_on" not in products:
-        steps.append(("ALTER TABLE products ADD COLUMN removed_on TEXT", ()))
+    for column in ("removed_on", "details_failed_at", "details_error"):
+        if column not in products:
+            steps.append((f"ALTER TABLE products ADD COLUMN {column} TEXT", ()))
     if "description" not in _columns(db, "promotions"):
         steps.append(("ALTER TABLE promotions ADD COLUMN description TEXT", ()))
     db.batch(steps)

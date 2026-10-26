@@ -72,7 +72,11 @@ Il `robots.txt` chiede anche di visitare il sito tra le 04:00 e le 08:45 UTC.
   di prezzo. Molti prodotti spariscono per qualche giorno e poi tornano.
   La scheda si scarica una volta sola e si riscarica solo se il prodotto cambia nome
   (`details_fetched_at` vuoto = scheda da scaricare). I prodotti esauriti o fuori catalogo non
-  hanno una pagina (il sito risponde 404): la loro scheda si scarica quando tornano.
+  hanno una pagina (il sito risponde 404): la loro scheda si scarica quando tornano. Anche alcuni
+  prodotti disponibili non hanno una pagina: `details_failed_at` e `details_error` registrano
+  l'ultimo tentativo fallito, e il prodotto viene riprovato dopo 7 giorni. Se il sito rifiuta 10
+  richieste di fila (HTTP 403, blocco anti-bot), lo step delle schede si ferma fino al run successivo.
+  Gli errori sono registrati nel log su una riga, senza interrompere il run.
 - `prices`: storico prezzi a periodi. Una riga per ogni periodo in cui prezzo, promo e
   disponibilità non cambiano. Il periodo corrente ha `valid_to` vuoto; quando qualcosa
   cambia viene chiuso con la data dell'ultimo run che l'ha visto e se ne apre uno nuovo.

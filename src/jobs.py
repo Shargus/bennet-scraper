@@ -3,7 +3,7 @@
 import json
 import logging
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from .client import BennetClient
 from .db import PRICE_FIELDS, upsert_sql
@@ -18,12 +18,27 @@ CHECKOUT_PROMOTIONS = {"PromotionMixMatch", "PromotionExtraRewardPoints"}
 # treated as failed, so products missing from it aren't marked as removed.
 MIN_CATALOG_COMPLETENESS = 0.98
 
+# A product page that doesn't exist (HTTP 404) is tried again after this many days.
+DETAILS_RETRY_DAYS = 7
+# Consecutive HTTP 403 answers (the site blocking the scraper) that stop the details step.
+MAX_REFUSED = 10
+
 # One-day offers (marketingLabel "Prezzo Eccezionale il 7/10"): the search backend keeps
 # the full price and hasPromotion false, the discount is only on the product page.
 SPECIAL_OFFER_LABEL = "Prezzo Eccezionale"
 SPECIAL_OFFER_TYPE = "PrezzoEccezionale"  # promo_type stored for them (not a site value)
 SPECIAL_OFFER_FIELDS = ("price", "price_per_unit", "regular_price", "regular_price_per_unit",
                         "has_promotion", "promo_type", "promo_value", "promo_start", "promo_end")
+
+
+def _status(exc) -> int | None:
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def _error(exc) -> str:
+    """One-line description of a failed request, for the log: 'HTTP 404' or the error message."""
+    status = _status(exc)
+    return f"HTTP {status}" if status else f"{type(exc).__name__}: {exc}"
 
 
 def _json(value):
@@ -106,8 +121,8 @@ def _apply_special_offer(client: BennetClient, row: dict, cur: dict | None, url:
         return False
     try:
         page = parse_product_page(client.product_page(url), today)
-    except Exception:
-        log.exception("failed to read special offer %s from %s", row["product_id"], url)
+    except Exception as e:
+        log.error("failed to read special offer %s from %s: %s", row["product_id"], url, _error(e))
         return False
     price, regular = page["price"], page["regular_price"]
     if not (price and regular and price < regular):
@@ -184,7 +199,7 @@ def update_prices(client: BennetClient, db, today: date) -> dict:
         if old["name"] != row["name"]:
             # a new name is the sign that the product page changed too
             renamed += 1
-            update["details_fetched_at"] = None
+            update.update(details_fetched_at=None, details_failed_at=None, details_error=None)
         if old["removed_on"]:
             returned += 1
             update["removed_on"] = None
@@ -240,6 +255,8 @@ def _save_details(db, product_id: str, details: dict):
         "sections": _json(details.get("sections")),
         "image_urls": _json(details.get("image_urls")),
         "details_fetched_at": datetime.now().isoformat(timespec="seconds"),
+        "details_failed_at": None,
+        "details_error": None,
     }, ("product_id",)))
 
 
@@ -260,8 +277,8 @@ def update_promotions(client: BennetClient, db, today: date) -> int:
     for i, r in enumerate(todo, 1):
         try:
             details = parse_product_page(client.product_page(r["url"]), today)
-        except Exception:
-            log.exception("failed to read promotion %s from %s", r["promo_code"], r["url"])
+        except Exception as e:
+            log.error("failed to read promotion %s from %s: %s", r["promo_code"], r["url"], _error(e))
             continue
         _save_details(db, r["product_id"], details)
         db.execute(*upsert_sql("promotions", {
@@ -289,30 +306,49 @@ def update_details(client: BennetClient, db, today: date, limit: int,
                    max_minutes: float | None = None) -> int:
     """Fetch the pages of new products and of products whose name changed
     (`update_prices` clears their details_fetched_at); pages are never refreshed otherwise.
-    Out-of-stock products and products no longer in the catalog have no page (404)
-    until they are back."""
+    Out-of-stock products and products no longer in the catalog have no page until they
+    are back. Some listed products have no page at all (HTTP 404): they are tried again
+    after DETAILS_RETRY_DAYS, after the products never tried."""
     deadline = time.monotonic() + max_minutes * 60 if max_minutes else None
+    retry = (today - timedelta(days=DETAILS_RETRY_DAYS)).isoformat()
     rows = db.query("""
         SELECT product_id, url FROM products
-        WHERE details_fetched_at IS NULL AND removed_on IS NULL AND NOT EXISTS (
+        WHERE details_fetched_at IS NULL AND removed_on IS NULL
+          AND (details_failed_at IS NULL OR details_failed_at <= ?)
+          AND NOT EXISTS (
             SELECT 1 FROM prices pr WHERE pr.product_id = products.product_id
               AND pr.valid_to IS NULL AND pr.stock_status = 'absent')
-        ORDER BY first_seen
+        ORDER BY details_failed_at IS NOT NULL, first_seen
         LIMIT ?
-    """, (limit,))
+    """, (retry, limit))
     log.info("fetching details for up to %d products", len(rows))
-    done = 0
+    done = not_found = failed = refused = 0
     for r in rows:
         if deadline and time.monotonic() > deadline:
             log.info("time budget of %s minutes reached", max_minutes)
             break
         try:
-            _save_details(db, r["product_id"], parse_product_page(client.product_page(r["url"]), today))
-        except Exception:
-            log.exception("failed to read %s", r["url"])
+            details = parse_product_page(client.product_page(r["url"]), today)
+        except Exception as e:
+            status = _status(e)
+            log.error("failed to read %s: %s", r["url"], _error(e))
+            if status and 400 <= status < 500 and status not in (403, 429):
+                not_found += 1
+                db.execute("UPDATE products SET details_failed_at = ?, details_error = ? WHERE product_id = ?",
+                           (today.isoformat(), _error(e), r["product_id"]))
+            else:
+                failed += 1
+            refused = refused + 1 if status == 403 else 0
+            if refused >= MAX_REFUSED:
+                log.error("%d requests in a row refused (HTTP 403): the site is blocking the scraper, "
+                          "details step stopped", refused)
+                break
             continue
+        refused = 0
+        _save_details(db, r["product_id"], details)
         done += 1
         if done % 20 == 0:
             log.info("details %d/%d", done, len(rows))
-    log.info("details fetched for %d products", done)
+    log.info("details: %d fetched, %d pages missing (retried in %d days), %d other failures",
+             done, not_found, DETAILS_RETRY_DAYS, failed)
     return done

@@ -181,7 +181,7 @@ export class PriceChart {
     const yMax = Math.ceil((max * 1.12) / step) * step;
     const Y = (v) => m.top + ht - (v / yMax) * ht;
     this.Y = Y; this.X = X;
-    const decimals = step < 1 ? 2 : 0;
+    const decimals = Number.isInteger(step) ? 0 : 2;
 
     const svg = s("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img", "aria-label": this.summary() });
     const hatchId = `${this.id}-hatch`;

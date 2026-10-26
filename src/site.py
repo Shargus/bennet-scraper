@@ -150,7 +150,9 @@ def build_site(db, out: str):
             "cat": cat, "eans": _loads(p["eans"]), "size": _size(p), "firstSeen": p["first_seen"],
             "removed": removed,
             "own": _own_brand(p), "chars": _loads(p["characteristics"]),
-            "images": _loads(p["image_urls"]) or ([p["thumbnail_url"]] if p["thumbnail_url"] else []),
+            "images": _loads(p["image_urls"]) or [], "thumb": p["thumbnail_url"],
+            # the product page was read, or why it couldn't be (e.g. "HTTP 404")
+            "detailsFetched": bool(p["details_fetched_at"]), "detailsError": p["details_error"],
             "shortDescription": p["short_description"], "description": p["description"],
             "ingredients": p["ingredients"], "allergens": _loads(p["allergens"]),
             "mayContain": p["may_contain"], "nutrition": _loads(p["nutrition"]),
