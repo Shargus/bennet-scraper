@@ -75,7 +75,9 @@ Il `robots.txt` chiede anche di visitare il sito tra le 04:00 e le 08:45 UTC.
   hanno una pagina (il sito risponde 404): la loro scheda si scarica quando tornano. Anche alcuni
   prodotti disponibili non hanno una pagina: `details_failed_at` e `details_error` registrano
   l'ultimo tentativo fallito, e il prodotto viene riprovato dopo 7 giorni. Se il sito rifiuta 10
-  richieste di fila (HTTP 403, blocco anti-bot), lo step delle schede si ferma fino al run successivo.
+  richieste di fila (HTTP 403, blocco anti-bot), lo step delle schede si ferma per 20 minuti e poi
+  riprende, perché il blocco di solito si toglie da solo; dopo 2 pause di fila senza nessuna scheda
+  letta, o se il budget di tempo non basta per una pausa, rinuncia fino al run successivo.
   Gli errori sono registrati nel log su una riga, senza interrompere il run.
 - `prices`: storico prezzi a periodi. Una riga per ogni periodo in cui prezzo, promo e
   disponibilità non cambiano. Il periodo corrente ha `valid_to` vuoto; quando qualcosa

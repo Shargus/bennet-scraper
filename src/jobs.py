@@ -20,8 +20,12 @@ MIN_CATALOG_COMPLETENESS = 0.98
 
 # A product page that doesn't exist (HTTP 404) is tried again after this many days.
 DETAILS_RETRY_DAYS = 7
-# Consecutive HTTP 403 answers (the site blocking the scraper) that stop the details step.
+# Consecutive HTTP 403 answers that mean the site is blocking the scraper: the details step
+# then pauses, since the block lifts by itself after a while, and gives up after
+# MAX_BLOCK_PAUSES pauses in a row with no page read in between.
 MAX_REFUSED = 10
+BLOCK_PAUSE_MINUTES = 20
+MAX_BLOCK_PAUSES = 2
 
 # One-day offers (marketingLabel "Prezzo Eccezionale il 7/10"): the search backend keeps
 # the full price and hasPromotion false, the discount is only on the product page.
@@ -322,7 +326,7 @@ def update_details(client: BennetClient, db, today: date, limit: int,
         LIMIT ?
     """, (retry, limit))
     log.info("fetching details for up to %d products", len(rows))
-    done = not_found = failed = refused = 0
+    done = not_found = failed = refused = pauses = 0
     for r in rows:
         if deadline and time.monotonic() > deadline:
             log.info("time budget of %s minutes reached", max_minutes)
@@ -340,11 +344,18 @@ def update_details(client: BennetClient, db, today: date, limit: int,
                 failed += 1
             refused = refused + 1 if status == 403 else 0
             if refused >= MAX_REFUSED:
+                left = (deadline - time.monotonic()) / 60 if deadline else None
+                if pauses >= MAX_BLOCK_PAUSES or (left is not None and left < BLOCK_PAUSE_MINUTES):
+                    log.error("%d requests in a row refused (HTTP 403) after %d pauses: the site is "
+                              "blocking the scraper, details step stopped", refused, pauses)
+                    break
+                pauses += 1
                 log.error("%d requests in a row refused (HTTP 403): the site is blocking the scraper, "
-                          "details step stopped", refused)
-                break
+                          "pausing for %d minutes (%d/%d)", refused, BLOCK_PAUSE_MINUTES, pauses, MAX_BLOCK_PAUSES)
+                time.sleep(BLOCK_PAUSE_MINUTES * 60)
+                refused = 0
             continue
-        refused = 0
+        refused = pauses = 0
         _save_details(db, r["product_id"], details)
         done += 1
         if done % 20 == 0:
