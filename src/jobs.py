@@ -272,14 +272,18 @@ def update_promotions(client: BennetClient, db, today: date) -> int:
     """Promotion dates are only on product pages; all products of a promo code share
     them, so one page per active code is enough (its details are saved too)."""
     day = today.isoformat()
+    # one product per code, its id and url from the same row (taking the MIN of each
+    # separately once saved a product's page under another product of the same code)
     todo = db.query("""
-        SELECT pr.promo_code, MIN(p.product_id) AS product_id, MIN(p.url) AS url
-        FROM prices pr JOIN products p USING (product_id)
-        LEFT JOIN promotions pm ON pm.promo_code = pr.promo_code
-        WHERE pr.valid_to IS NULL AND pr.has_promotion AND pr.promo_code IS NOT NULL
-          AND pr.stock_status IS NOT 'absent'
-          AND (pm.promo_code IS NULL OR pm.end_date IS NULL OR pm.end_date < ?)
-        GROUP BY pr.promo_code
+        SELECT promo_code, product_id, url FROM (
+            SELECT pr.promo_code, p.product_id, p.url,
+                   ROW_NUMBER() OVER (PARTITION BY pr.promo_code ORDER BY p.product_id) AS n
+            FROM prices pr JOIN products p USING (product_id)
+            LEFT JOIN promotions pm ON pm.promo_code = pr.promo_code
+            WHERE pr.valid_to IS NULL AND pr.has_promotion AND pr.promo_code IS NOT NULL
+              AND pr.stock_status IS NOT 'absent'
+              AND (pm.promo_code IS NULL OR pm.end_date IS NULL OR pm.end_date < ?)
+        ) WHERE n = 1
     """, (day,))
     log.info("%d promotion codes need dates", len(todo))
     for i, r in enumerate(todo, 1):
