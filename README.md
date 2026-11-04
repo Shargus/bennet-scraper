@@ -73,7 +73,10 @@ Il `robots.txt` chiede anche di visitare il sito tra le 04:00 e le 08:45 UTC.
   La scheda si scarica una volta sola e si riscarica solo se il prodotto cambia nome
   (`details_fetched_at` vuoto = scheda da scaricare). I prodotti esauriti o fuori catalogo non
   hanno una pagina (il sito risponde 404): la loro scheda si scarica quando tornano. Anche alcuni
-  prodotti disponibili non hanno una pagina (HTTP 404): `details_failed_at`, `details_error` e
+  prodotti disponibili non hanno una pagina con il punto vendita selezionato, ma ce l'hanno senza:
+  per questo le schede si scaricano senza selezionare il negozio (promozioni e offerte del giorno
+  invece si leggono dal negozio, perché date e prezzi dipendono da lui). Se la pagina non esiste
+  nemmeno così (HTTP 404), `details_failed_at`, `details_error` e
   `details_failures` registrano i tentativi falliti; il prodotto viene riprovato una volta, in un
   run successivo, e poi abbandonato. Un HTTP 403 invece è un blocco temporaneo di Akamai (sul sito
   compare "Ops... qualcosa è andato storto!") e non conta come pagina mancante. Se il sito rifiuta 10

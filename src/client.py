@@ -35,6 +35,10 @@ class BennetClient:
         # answers 403 when it gets back Akamai cookies that were never validated
         # by the browser's JS, so it gets a separate session cleared before each call.
         self.search_session = requests.Session(impersonate="chrome")
+        # No store selected, for product data (ingredients, images...): some products listed
+        # in the store's catalog answer 404 with the store selected, but have a page without it.
+        self.storeless_session = requests.Session(impersonate="chrome")
+        self.storeless_session.headers.update(self.session.headers)
         self.csrf_token = None
         # Store whose online catalog is used for prices; a physical store without
         # its own e-commerce (e.g. 0113) is served by a nearby one (e.g. 0009).
@@ -128,9 +132,10 @@ class BennetClient:
             page += 1
         return hits, total
 
-    def product_page(self, url: str) -> str:
-        if self.search_store_id is None:
+    def product_page(self, url: str, store: bool = True) -> str:
+        """The product page as seen from the selected store, or with no store selected."""
+        if store and self.search_store_id is None:
             self.select_store()
         if url.startswith("/"):
             url = SITE + url
-        return self._get(url).text
+        return self._get(url, session=None if store else self.storeless_session).text

@@ -128,7 +128,7 @@ def _apply_special_offer(client: BennetClient, row: dict, cur: dict | None, url:
     try:
         page = parse_product_page(client.product_page(url), today)
     except Exception as e:
-        log.error("failed to read special offer %s from %s: %s", row["product_id"], url, _error(e))
+        log.error("failed to read special offer %s (%s) from %s", row["product_id"], _error(e), url)
         return False
     price, regular = page["price"], page["regular_price"]
     if not (price and regular and price < regular):
@@ -286,7 +286,7 @@ def update_promotions(client: BennetClient, db, today: date) -> int:
         try:
             details = parse_product_page(client.product_page(r["url"]), today)
         except Exception as e:
-            log.error("failed to read promotion %s from %s: %s", r["promo_code"], r["url"], _error(e))
+            log.error("failed to read promotion %s (%s) from %s", r["promo_code"], _error(e), r["url"])
             continue
         _save_details(db, r["product_id"], details)
         db.execute(*upsert_sql("promotions", {
@@ -312,7 +312,7 @@ def update_promotions(client: BennetClient, db, today: date) -> int:
 
 def update_details(client: BennetClient, db, today: date, limit: int,
                    max_minutes: float | None = None) -> int:
-    """Fetch the pages of new products and of products whose name changed
+    """Fetch the pages, with no store selected, of new products and of products whose name changed
     (`update_prices` clears their details_fetched_at); pages are never refreshed otherwise.
     Out-of-stock products and products no longer in the catalog have no page until they
     are back. Some listed products have no page at all (HTTP 404): they are tried once
@@ -336,10 +336,13 @@ def update_details(client: BennetClient, db, today: date, limit: int,
             log.info("time budget of %s minutes reached", max_minutes)
             break
         try:
-            details = parse_product_page(client.product_page(r["url"]), today)
+            # product data doesn't depend on the store, and some products listed in the
+            # store's catalog have no page with the store selected (HTTP 404)
+            details = parse_product_page(client.product_page(r["url"], store=False), today)
         except Exception as e:
             status = _status(e)
-            log.error("failed to read %s: %s", r["url"], _error(e))
+            # the error comes first: a link followed by ":" opens an error page on the site
+            log.error("failed to read (%s) %s", _error(e), r["url"])
             if status and 400 <= status < 500 and status not in (403, 429):
                 not_found += 1
                 db.execute("UPDATE products SET details_failed_at = ?, details_error = ?, "
