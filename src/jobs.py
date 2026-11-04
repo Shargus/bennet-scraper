@@ -3,7 +3,7 @@
 import json
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from .client import BennetClient
 from .db import PRICE_FIELDS, upsert_sql
@@ -18,8 +18,10 @@ CHECKOUT_PROMOTIONS = {"PromotionMixMatch", "PromotionExtraRewardPoints"}
 # treated as failed, so products missing from it aren't marked as removed.
 MIN_CATALOG_COMPLETENESS = 0.98
 
-# A product page that doesn't exist (HTTP 404) is tried again after this many days.
-DETAILS_RETRY_DAYS = 7
+# A product page that doesn't exist (HTTP 404) is tried this many times in all, on
+# different days, then never again. HTTP 403 is not counted: it is the site blocking the
+# scraper for a while, and the same pages load fine later.
+MAX_DETAILS_FAILURES = 2
 # Consecutive HTTP 403 answers that mean the site is blocking the scraper: the details step
 # then pauses, since the block lifts by itself after a while, and gives up after
 # MAX_BLOCK_PAUSES pauses in a row with no page read in between.
@@ -203,7 +205,8 @@ def update_prices(client: BennetClient, db, today: date) -> dict:
         if old["name"] != row["name"]:
             # a new name is the sign that the product page changed too
             renamed += 1
-            update.update(details_fetched_at=None, details_failed_at=None, details_error=None)
+            update.update(details_fetched_at=None, details_failed_at=None, details_error=None,
+                          details_failures=None)
         if old["removed_on"]:
             returned += 1
             update["removed_on"] = None
@@ -261,6 +264,7 @@ def _save_details(db, product_id: str, details: dict):
         "details_fetched_at": datetime.now().isoformat(timespec="seconds"),
         "details_failed_at": None,
         "details_error": None,
+        "details_failures": None,
     }, ("product_id",)))
 
 
@@ -311,20 +315,20 @@ def update_details(client: BennetClient, db, today: date, limit: int,
     """Fetch the pages of new products and of products whose name changed
     (`update_prices` clears their details_fetched_at); pages are never refreshed otherwise.
     Out-of-stock products and products no longer in the catalog have no page until they
-    are back. Some listed products have no page at all (HTTP 404): they are tried again
-    after DETAILS_RETRY_DAYS, after the products never tried."""
+    are back. Some listed products have no page at all (HTTP 404): they are tried once
+    more on a later day, after the products never tried, then given up."""
     deadline = time.monotonic() + max_minutes * 60 if max_minutes else None
-    retry = (today - timedelta(days=DETAILS_RETRY_DAYS)).isoformat()
     rows = db.query("""
         SELECT product_id, url FROM products
         WHERE details_fetched_at IS NULL AND removed_on IS NULL
-          AND (details_failed_at IS NULL OR details_failed_at <= ?)
+          AND (details_failed_at IS NULL
+               OR (COALESCE(details_failures, 1) < ? AND details_failed_at < ?))
           AND NOT EXISTS (
             SELECT 1 FROM prices pr WHERE pr.product_id = products.product_id
               AND pr.valid_to IS NULL AND pr.stock_status = 'absent')
         ORDER BY details_failed_at IS NOT NULL, first_seen
         LIMIT ?
-    """, (retry, limit))
+    """, (MAX_DETAILS_FAILURES, today.isoformat(), limit))
     log.info("fetching details for up to %d products", len(rows))
     done = not_found = failed = refused = pauses = 0
     for r in rows:
@@ -338,7 +342,8 @@ def update_details(client: BennetClient, db, today: date, limit: int,
             log.error("failed to read %s: %s", r["url"], _error(e))
             if status and 400 <= status < 500 and status not in (403, 429):
                 not_found += 1
-                db.execute("UPDATE products SET details_failed_at = ?, details_error = ? WHERE product_id = ?",
+                db.execute("UPDATE products SET details_failed_at = ?, details_error = ?, "
+                           "details_failures = COALESCE(details_failures, 0) + 1 WHERE product_id = ?",
                            (today.isoformat(), _error(e), r["product_id"]))
             else:
                 failed += 1
@@ -360,6 +365,5 @@ def update_details(client: BennetClient, db, today: date, limit: int,
         done += 1
         if done % 20 == 0:
             log.info("details %d/%d", done, len(rows))
-    log.info("details: %d fetched, %d pages missing (retried in %d days), %d other failures",
-             done, not_found, DETAILS_RETRY_DAYS, failed)
+    log.info("details: %d fetched, %d pages missing, %d other failures", done, not_found, failed)
     return done
